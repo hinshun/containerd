@@ -16,18 +16,16 @@ message Resource {
 
     // NOTE(stevvooe): Need to define clear precedence for user/group/uid/gid precedence.
 
-    // Uid specifies the user id for the resource. A string type is used for
-    // compatibility across different OS.
-    string uid = 2;
+    // Uid specifies the user id for the resource.
+    int64 uid = 2;
 
-    // Gid specifies the group id for the resource. A string type is used for
-    // compatibility across different OS.
-    string gid = 3;
+    // Gid specifies the group id for the resource.
+    int64 gid = 3;
 
     // user and group are not currently used but their field numbers have been
     // reserved for future use. As such, they are marked as deprecated.
-    string user = 4 [deprecated=true];
-    string group = 5 [deprecated=true];
+    string user = 4 [deprecated=true]; // "deprecated" stands for "reserved" here
+    string group = 5 [deprecated=true]; // "deprecated" stands for "reserved" here
 
     // Mode defines the file mode and permissions. We've used the same
     // bit-packing from Go's os package,
@@ -42,7 +40,9 @@ message Resource {
     uint64 size = 7;
 
     // Digest specifies the content digest of the target file. Only valid for
-    // regular files. The strings are formatted as <alg>:<digest hex bytes>.
+    // regular files. The strings are formatted in OCI style, i.e. <alg>:<encoded>.
+    // For detailed information about the format, please refer to OCI Image Spec:
+    // https://github.com/opencontainers/image-spec/blob/master/descriptor.md#digests-and-verification
     // The digests are sorted in lexical order and implementations may choose
     // which algorithms they prefer.
     repeated string digest = 8;
@@ -53,10 +53,10 @@ message Resource {
     // resource path.
     string target = 9;
 
-    // Major specifies the major device number for charactor and block devices.
+    // Major specifies the major device number for character and block devices.
     uint64 major = 10;
 
-    // Minor specifies the minor device number for charactor and block devices.
+    // Minor specifies the minor device number for character and block devices.
     uint64 minor = 11;
 
     // Xattr provides storage for extended attributes for the target resource.

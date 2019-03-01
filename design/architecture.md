@@ -19,7 +19,7 @@ is simply a directory on the filesystem.
 
 ![Architecture](architecture.png)
 
-Note that while these architectural ideas are important to understanding the
+Note that while these architectural ideas are important to understand the
 system, code layout may not reflect the exact architecture. These ideas should
 be used as a guide for placing functionality and behavior and understanding the
 thought behind the design.
@@ -28,7 +28,6 @@ thought behind the design.
 
 External users interact with services, made available via a GRPC API.
 
-- __*Distribution*__: The distribution service supports pulling images.
 - __*Bundle*__: The bundle service allows the user to extract and pack bundles
   from disk images.
 - __*Runtime*__: The runtime service supports the execution of _bundles_,
@@ -40,7 +39,7 @@ may be exported for access via corresponding _services_.
 
 ## Modules
 
-In addition to the subsystems have, we have several components that may cross
+In addition to the subsystems, we have several components that may cross
 subsystem boundaries, referenced to as components. We have the following
 components:
 
@@ -61,6 +60,12 @@ components:
   various _modules_
 - __*Metrics*__: Each components will export several metrics, accessible via
   the metrics API. (We may want to promote this to a subsystem.
+
+## Client-side components
+
+Some components are implemented on the client side for flexibility:
+
+- __*Distribution*__: Functions for pulling and pushing images
 
 ## Data Flow
 

@@ -1,17 +1,26 @@
+/*
+  Copyright The containerd Authors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 package btrfs
 
 import "sort"
 
 /*
-#cgo LDFLAGS: -lbtrfs
-
 #include <stddef.h>
 #include <btrfs/ioctl.h>
 #include "btrfs.h"
-
-// Required because Go has struct casting rules for negative numbers
-const __u64 u64_BTRFS_LAST_FREE_OBJECTID = (__u64)BTRFS_LAST_FREE_OBJECTID;
-const __u64 negative_one = (__u64)-1;
 
 static char* get_name_btrfs_ioctl_vol_args_v2(struct btrfs_ioctl_vol_args_v2* btrfs_struct) {
 	return btrfs_struct->name;
@@ -20,7 +29,6 @@ static char* get_name_btrfs_ioctl_vol_args_v2(struct btrfs_ioctl_vol_args_v2* bt
 import "C"
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -49,6 +57,17 @@ func IsSubvolume(path string) error {
 	return isStatfsSubvol(&statfs)
 }
 
+// SubvolID returns the subvolume ID for the provided path
+func SubvolID(path string) (uint64, error) {
+	fp, err := openSubvolDir(path)
+	if err != nil {
+		return 0, err
+	}
+	defer fp.Close()
+
+	return subvolID(fp.Fd())
+}
+
 // SubvolInfo returns information about the subvolume at the provided path.
 func SubvolInfo(path string) (info Info, err error) {
 	path, err = filepath.EvalSymlinks(path)
@@ -73,13 +92,13 @@ func SubvolInfo(path string) (info Info, err error) {
 	}
 
 	if info, ok := subvolsByID[id]; ok {
-		return info, nil
+		return *info, nil
 	}
 
 	return info, errors.Errorf("%q not found", path)
 }
 
-func subvolMap(path string) (map[uint64]Info, error) {
+func subvolMap(path string) (map[uint64]*Info, error) {
 	fp, err := openSubvolDir(path)
 	if err != nil {
 		return nil, err
@@ -92,11 +111,11 @@ func subvolMap(path string) (map[uint64]Info, error) {
 	args.key.min_type = C.BTRFS_ROOT_ITEM_KEY
 	args.key.max_type = C.BTRFS_ROOT_BACKREF_KEY
 	args.key.min_objectid = C.BTRFS_FS_TREE_OBJECTID
-	args.key.max_objectid = C.u64_BTRFS_LAST_FREE_OBJECTID
-	args.key.max_offset = C.negative_one
-	args.key.max_transid = C.negative_one
+	args.key.max_objectid = C.BTRFS_LAST_FREE_OBJECTID
+	args.key.max_offset = ^C.__u64(0)
+	args.key.max_transid = ^C.__u64(0)
 
-	subvolsByID := map[uint64]Info{}
+	subvolsByID := make(map[uint64]*Info)
 
 	for {
 		args.key.nr_items = 4096
@@ -119,6 +138,9 @@ func subvolMap(path string) (map[uint64]Info, error) {
 			buf = buf[shSize:]
 
 			info := subvolsByID[uint64(sh.objectid)]
+			if info == nil {
+				info = &Info{}
+			}
 			info.ID = uint64(sh.objectid)
 
 			if sh._type == C.BTRFS_ROOT_BACKREF_KEY {
@@ -225,7 +247,7 @@ func SubvolList(path string) ([]Info, error) {
 
 	subvols := make([]Info, 0, len(subvolsByID))
 	for _, sv := range subvolsByID {
-		subvols = append(subvols, sv)
+		subvols = append(subvols, *sv)
 	}
 
 	sort.Sort(infosByID(subvols))
@@ -301,7 +323,6 @@ func SubvolSnapshot(dst, src string, readonly bool) error {
 
 // SubvolDelete deletes the subvolumes under the given path.
 func SubvolDelete(path string) error {
-	fmt.Println("delete", path)
 	dir, name := filepath.Split(path)
 	fp, err := openSubvolDir(dir)
 	if err != nil {

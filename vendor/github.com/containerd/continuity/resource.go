@@ -1,3 +1,19 @@
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package continuity
 
 import (
@@ -7,8 +23,8 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/opencontainers/go-digest"
 	pb "github.com/containerd/continuity/proto"
+	"github.com/opencontainers/go-digest"
 )
 
 // TODO(stevvooe): A record based model, somewhat sketched out at the bottom
@@ -26,8 +42,8 @@ type Resource interface {
 	// Mode returns the
 	Mode() os.FileMode
 
-	UID() string
-	GID() string
+	UID() int64
+	GID() int64
 }
 
 // ByPath provides the canonical sort order for a set of resources. Use with
@@ -240,7 +256,7 @@ type Device interface {
 type resource struct {
 	paths    []string
 	mode     os.FileMode
-	uid, gid string
+	uid, gid int64
 	xattrs   map[string][]byte
 }
 
@@ -258,11 +274,11 @@ func (r *resource) Mode() os.FileMode {
 	return r.mode
 }
 
-func (r *resource) UID() string {
+func (r *resource) UID() int64 {
 	return r.uid
 }
 
-func (r *resource) GID() string {
+func (r *resource) GID() int64 {
 	return r.gid
 }
 

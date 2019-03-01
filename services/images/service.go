@@ -1,85 +1,84 @@
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package images
 
 import (
-	"github.com/boltdb/bolt"
-	imagesapi "github.com/containerd/containerd/api/services/images"
-	"github.com/containerd/containerd/images"
+	"context"
+
+	imagesapi "github.com/containerd/containerd/api/services/images/v1"
 	"github.com/containerd/containerd/plugin"
-	"github.com/golang/protobuf/ptypes/empty"
-	"golang.org/x/net/context"
+	"github.com/containerd/containerd/services"
+	ptypes "github.com/gogo/protobuf/types"
+	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 )
 
 func init() {
-	plugin.Register("images-grpc", &plugin.Registration{
+	plugin.Register(&plugin.Registration{
 		Type: plugin.GRPCPlugin,
-		Init: func(ic *plugin.InitContext) (interface{}, error) {
-			return NewService(ic.Meta), nil
+		ID:   "images",
+		Requires: []plugin.Type{
+			plugin.ServicePlugin,
+		},
+		InitFn: func(ic *plugin.InitContext) (interface{}, error) {
+			plugins, err := ic.GetByType(plugin.ServicePlugin)
+			if err != nil {
+				return nil, err
+			}
+			p, ok := plugins[services.ImagesService]
+			if !ok {
+				return nil, errors.New("images service not found")
+			}
+			i, err := p.Instance()
+			if err != nil {
+				return nil, err
+			}
+			return &service{local: i.(imagesapi.ImagesClient)}, nil
 		},
 	})
 }
 
-type Service struct {
-	db *bolt.DB
+type service struct {
+	local imagesapi.ImagesClient
 }
 
-func NewService(db *bolt.DB) imagesapi.ImagesServer {
-	return &Service{db: db}
-}
+var _ imagesapi.ImagesServer = &service{}
 
-func (s *Service) Register(server *grpc.Server) error {
+func (s *service) Register(server *grpc.Server) error {
 	imagesapi.RegisterImagesServer(server, s)
 	return nil
 }
 
-func (s *Service) Get(ctx context.Context, req *imagesapi.GetRequest) (*imagesapi.GetResponse, error) {
-	var resp imagesapi.GetResponse
-
-	return &resp, s.withStoreView(ctx, func(ctx context.Context, store images.Store) error {
-		image, err := store.Get(ctx, req.Name)
-		if err != nil {
-			return mapGRPCError(err, req.Name)
-		}
-		imagepb := imageToProto(&image)
-		resp.Image = &imagepb
-		return nil
-	})
+func (s *service) Get(ctx context.Context, req *imagesapi.GetImageRequest) (*imagesapi.GetImageResponse, error) {
+	return s.local.Get(ctx, req)
 }
 
-func (s *Service) Put(ctx context.Context, req *imagesapi.PutRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, s.withStoreUpdate(ctx, func(ctx context.Context, store images.Store) error {
-		return mapGRPCError(store.Put(ctx, req.Image.Name, descFromProto(&req.Image.Target)), req.Image.Name)
-	})
+func (s *service) List(ctx context.Context, req *imagesapi.ListImagesRequest) (*imagesapi.ListImagesResponse, error) {
+	return s.local.List(ctx, req)
 }
 
-func (s *Service) List(ctx context.Context, _ *imagesapi.ListRequest) (*imagesapi.ListResponse, error) {
-	var resp imagesapi.ListResponse
-
-	return &resp, s.withStoreView(ctx, func(ctx context.Context, store images.Store) error {
-		images, err := store.List(ctx)
-		if err != nil {
-			return mapGRPCError(err, "")
-		}
-
-		resp.Images = imagesToProto(images)
-		return nil
-	})
+func (s *service) Create(ctx context.Context, req *imagesapi.CreateImageRequest) (*imagesapi.CreateImageResponse, error) {
+	return s.local.Create(ctx, req)
 }
 
-func (s *Service) Delete(ctx context.Context, req *imagesapi.DeleteRequest) (*empty.Empty, error) {
-	return &empty.Empty{}, s.withStoreUpdate(ctx, func(ctx context.Context, store images.Store) error {
-		return mapGRPCError(store.Delete(ctx, req.Name), req.Name)
-	})
+func (s *service) Update(ctx context.Context, req *imagesapi.UpdateImageRequest) (*imagesapi.UpdateImageResponse, error) {
+	return s.local.Update(ctx, req)
 }
 
-func (s *Service) withStore(ctx context.Context, fn func(ctx context.Context, store images.Store) error) func(tx *bolt.Tx) error {
-	return func(tx *bolt.Tx) error { return fn(ctx, images.NewImageStore(tx)) }
-}
-
-func (s *Service) withStoreView(ctx context.Context, fn func(ctx context.Context, store images.Store) error) error {
-	return s.db.View(s.withStore(ctx, fn))
-}
-
-func (s *Service) withStoreUpdate(ctx context.Context, fn func(ctx context.Context, store images.Store) error) error {
-	return s.db.Update(s.withStore(ctx, fn))
+func (s *service) Delete(ctx context.Context, req *imagesapi.DeleteImageRequest) (*ptypes.Empty, error) {
+	return s.local.Delete(ctx, req)
 }

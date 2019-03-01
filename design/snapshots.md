@@ -105,7 +105,7 @@ If the user wants to discard committed snapshots, the _remove_ operation can
 also be used, but any children must be removed before proceeding.
 
 For detailed usage information, see the
-[GoDoc](https://godoc.org/github.com/containerd/containerd/snapshot#Snapshotter).
+[GoDoc](https://godoc.org/github.com/containerd/containerd/snapshots#Snapshotter).
 
 ### Graph metadata
 
@@ -137,7 +137,7 @@ We get back a list of mounts from `Snapshotter.Prepare`, with the `key`
 identifying the active snapshot. Mount this to the temporary location with the
 following:
 
-	if err := MountAll(mounts, tmpDir); err != nil { ... }
+	if err := mount.All(mounts, tmpDir); err != nil { ... }
 
 Once the mounts are performed, our temporary location is ready to capture
 a diff. In practice, this works similar to a filesystem transaction. The

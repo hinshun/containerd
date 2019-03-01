@@ -1,3 +1,19 @@
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package docker
 
 import (
@@ -53,9 +69,9 @@ func TestBasicResolver(t *testing.T) {
 		})
 
 		base, options, close := tlsServer(wrapped)
-		options.Credentials = func(string) (string, string, error) {
+		options.Authorizer = NewAuthorizer(options.Client, func(string) (string, string, error) {
 			return "user1", "password1", nil
-		}
+		})
 		return base, options, close
 	}
 	runBasicTest(t, "testname", basicAuth)
@@ -158,7 +174,7 @@ func TestBadTokenResolver(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	h := content(ocispec.MediaTypeImageManifest, []byte("not anything parse-able"))
+	h := newContent(ocispec.MediaTypeImageManifest, []byte("not anything parse-able"))
 
 	base, ro, close := withTokenServer(th, creds)(logHandler{t, h})
 	defer close()
@@ -166,7 +182,7 @@ func TestBadTokenResolver(t *testing.T) {
 	resolver := NewResolver(ro)
 	image := fmt.Sprintf("%s/doesntmatter:sometatg", base)
 
-	_, _, _, err := resolver.Resolve(ctx, image)
+	_, _, err := resolver.Resolve(ctx, image)
 	if err == nil {
 		t.Fatal("Expected error getting token with inssufficient scope")
 	}
@@ -199,7 +215,7 @@ func withTokenServer(th http.Handler, creds func(string) (string, string, error)
 		})
 
 		base, options, close := tlsServer(wrapped)
-		options.Credentials = creds
+		options.Authorizer = NewAuthorizer(options.Client, creds)
 		options.Client.Transport.(*http.Transport).TLSClientConfig.RootCAs.AddCert(cert)
 		return base, options, func() {
 			s.Close()
@@ -235,7 +251,6 @@ type logHandler struct {
 }
 
 func (h logHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	h.t.Logf("%s %s", r.Method, r.URL.String())
 	h.handler.ServeHTTP(rw, r)
 }
 
@@ -247,10 +262,10 @@ func runBasicTest(t *testing.T, name string, sf func(h http.Handler) (string, Re
 	)
 
 	m := newManifest(
-		content(ocispec.MediaTypeImageConfig, []byte("1")),
-		content(ocispec.MediaTypeImageLayerGzip, []byte("2")),
+		newContent(ocispec.MediaTypeImageConfig, []byte("1")),
+		newContent(ocispec.MediaTypeImageLayerGzip, []byte("2")),
 	)
-	mc := content(ocispec.MediaTypeImageManifest, m.OCIManifest())
+	mc := newContent(ocispec.MediaTypeImageManifest, m.OCIManifest())
 	m.RegisterHandler(r, name)
 	r.Handle(fmt.Sprintf("/v2/%s/manifests/%s", name, tag), mc)
 	r.Handle(fmt.Sprintf("/v2/%s/manifests/%s", name, mc.Digest()), mc)
@@ -261,7 +276,11 @@ func runBasicTest(t *testing.T, name string, sf func(h http.Handler) (string, Re
 	resolver := NewResolver(ro)
 	image := fmt.Sprintf("%s/%s:%s", base, name, tag)
 
-	_, d, f, err := resolver.Resolve(ctx, image)
+	_, d, err := resolver.Resolve(ctx, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := resolver.Fetcher(ctx, image)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +346,7 @@ type testContent struct {
 	content   []byte
 }
 
-func content(mediaType string, b []byte) testContent {
+func newContent(mediaType string, b []byte) testContent {
 	return testContent{
 		mediaType: mediaType,
 		content:   b,

@@ -1,3 +1,19 @@
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package reference
 
 import (
@@ -12,8 +28,11 @@ import (
 )
 
 var (
-	ErrInvalid          = errors.New("invalid reference")
-	ErrObjectRequired   = errors.New("object required")
+	// ErrInvalid is returned when there is an invalid reference
+	ErrInvalid = errors.New("invalid reference")
+	// ErrObjectRequired is returned when the object is required
+	ErrObjectRequired = errors.New("object required")
+	// ErrHostnameRequired is returned when the hostname is required
 	ErrHostnameRequired = errors.New("hostname required")
 )
 
@@ -47,8 +66,8 @@ type Spec struct {
 
 	// Object contains the identifier for the remote resource. Classically,
 	// this is a tag but can refer to anything in a remote. By convention, any
-	// portion that may be a partial or whole digest will be preceeded by an
-	// `@`. Anything preceeding the `@` will be referred to as the "tag".
+	// portion that may be a partial or whole digest will be preceded by an
+	// `@`. Anything preceding the `@` will be referred to as the "tag".
 	//
 	// In practice, we will see this broken down into the following formats:
 	//
@@ -79,20 +98,20 @@ func Parse(s string) (Spec, error) {
 		return Spec{}, ErrHostnameRequired
 	}
 
-	parts := splitRe.Split(u.Path, 2)
-	if len(parts) < 2 {
-		return Spec{}, ErrObjectRequired
-	}
+	var object string
 
-	// This allows us to retain the @ to signify digests or shortend digests in
-	// the object.
-	object := u.Path[len(parts[0]):]
-	if object[:1] == ":" {
-		object = object[1:]
+	if idx := splitRe.FindStringIndex(u.Path); idx != nil {
+		// This allows us to retain the @ to signify digests or shortened digests in
+		// the object.
+		object = u.Path[idx[0]:]
+		if object[:1] == ":" {
+			object = object[1:]
+		}
+		u.Path = u.Path[:idx[0]]
 	}
 
 	return Spec{
-		Locator: path.Join(u.Host, parts[0]),
+		Locator: path.Join(u.Host, u.Path),
 		Object:  object,
 	}, nil
 }
@@ -119,6 +138,9 @@ func (r Spec) Digest() digest.Digest {
 
 // String returns the normalized string for the ref.
 func (r Spec) String() string {
+	if r.Object == "" {
+		return r.Locator
+	}
 	if r.Object[:1] == "@" {
 		return fmt.Sprintf("%v%v", r.Locator, r.Object)
 	}
@@ -126,7 +148,7 @@ func (r Spec) String() string {
 	return fmt.Sprintf("%v:%v", r.Locator, r.Object)
 }
 
-// SplitObject provides two parts of the object spec, delimiited by an `@`
+// SplitObject provides two parts of the object spec, delimited by an `@`
 // symbol.
 //
 // Either may be empty and it is the callers job to validate them
@@ -135,7 +157,6 @@ func SplitObject(obj string) (tag string, dgst digest.Digest) {
 	parts := strings.SplitAfterN(obj, "@", 2)
 	if len(parts) < 2 {
 		return parts[0], ""
-	} else {
-		return parts[0], digest.Digest(parts[1])
 	}
+	return parts[0], digest.Digest(parts[1])
 }

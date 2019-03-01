@@ -1,9 +1,26 @@
 // +build !windows
 
+/*
+   Copyright The containerd Authors.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
+
 package archive
 
 import (
 	"archive/tar"
+	"context"
 	"os"
 	"sync"
 	"syscall"
@@ -11,6 +28,7 @@ import (
 	"github.com/containerd/continuity/sysx"
 	"github.com/opencontainers/runc/libcontainer/system"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 func tarName(p string) (string, error) {
@@ -27,26 +45,17 @@ func setHeaderForSpecialDevice(hdr *tar.Header, name string, fi os.FileInfo) err
 		return errors.New("unsupported stat type")
 	}
 
+	// Rdev is int32 on darwin/bsd, int64 on linux/solaris
+	rdev := uint64(s.Rdev) // nolint: unconvert
+
 	// Currently go does not fill in the major/minors
 	if s.Mode&syscall.S_IFBLK != 0 ||
 		s.Mode&syscall.S_IFCHR != 0 {
-		hdr.Devmajor = int64(major(uint64(s.Rdev)))
-		hdr.Devminor = int64(minor(uint64(s.Rdev)))
+		hdr.Devmajor = int64(unix.Major(rdev))
+		hdr.Devminor = int64(unix.Minor(rdev))
 	}
 
 	return nil
-}
-
-func major(device uint64) uint64 {
-	return (device >> 8) & 0xfff
-}
-
-func minor(device uint64) uint64 {
-	return (device & 0xff) | ((device >> 12) & 0xfff00)
-}
-
-func mkdev(major int64, minor int64) uint32 {
-	return uint32(((minor & 0xfff00) << 12) | ((major & 0xfff) << 8) | (minor & 0xff))
 }
 
 func open(p string) (*os.File, error) {
@@ -54,24 +63,28 @@ func open(p string) (*os.File, error) {
 }
 
 func openFile(name string, flag int, perm os.FileMode) (*os.File, error) {
-	return os.OpenFile(name, flag, perm)
+	f, err := os.OpenFile(name, flag, perm)
+	if err != nil {
+		return nil, err
+	}
+	// Call chmod to avoid permission mask
+	if err := os.Chmod(name, perm); err != nil {
+		return nil, err
+	}
+	return f, err
 }
 
 func mkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
-func prepareApply() func() {
-	// Unset unmask before doing an apply operation,
-	// restore unmask when complete
-	oldmask := syscall.Umask(0)
-	return func() {
-		syscall.Umask(oldmask)
+func mkdir(path string, perm os.FileMode) error {
+	if err := os.Mkdir(path, perm); err != nil {
+		return err
 	}
-}
-
-func skipFile(*tar.Header) bool {
-	return false
+	// Only final created directory gets explicit permission
+	// call to avoid permission mask
+	return os.Chmod(path, perm)
 }
 
 var (
@@ -83,26 +96,33 @@ func setInUserNS() {
 	inUserNS = system.RunningInUserNS()
 }
 
-// handleTarTypeBlockCharFifo is an OS-specific helper function used by
-// createTarFile to handle the following types of header: Block; Char; Fifo
-func handleTarTypeBlockCharFifo(hdr *tar.Header, path string) error {
-	nsOnce.Do(setInUserNS)
-	if inUserNS {
+func skipFile(hdr *tar.Header) bool {
+	switch hdr.Typeflag {
+	case tar.TypeBlock, tar.TypeChar:
 		// cannot create a device if running in user namespace
-		return nil
+		nsOnce.Do(setInUserNS)
+		return inUserNS
+	default:
+		return false
 	}
+}
 
+// handleTarTypeBlockCharFifo is an OS-specific helper function used by
+// createTarFile to handle the following types of header: Block; Char; Fifo.
+// This function must not be called for Block and Char when running in userns.
+// (skipFile() should return true for them.)
+func handleTarTypeBlockCharFifo(hdr *tar.Header, path string) error {
 	mode := uint32(hdr.Mode & 07777)
 	switch hdr.Typeflag {
 	case tar.TypeBlock:
-		mode |= syscall.S_IFBLK
+		mode |= unix.S_IFBLK
 	case tar.TypeChar:
-		mode |= syscall.S_IFCHR
+		mode |= unix.S_IFCHR
 	case tar.TypeFifo:
-		mode |= syscall.S_IFIFO
+		mode |= unix.S_IFIFO
 	}
 
-	return syscall.Mknod(path, mode, int(mkdev(hdr.Devmajor, hdr.Devminor)))
+	return unix.Mknod(path, mode, int(unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor))))
 }
 
 func handleLChmod(hdr *tar.Header, path string, hdrInfo os.FileInfo) error {
@@ -122,7 +142,7 @@ func handleLChmod(hdr *tar.Header, path string, hdrInfo os.FileInfo) error {
 
 func getxattr(path, attr string) ([]byte, error) {
 	b, err := sysx.LGetxattr(path, attr)
-	if err == syscall.ENOTSUP || err == syscall.ENODATA {
+	if err == unix.ENOTSUP || err == sysx.ENODATA {
 		return nil, nil
 	}
 	return b, err
@@ -130,4 +150,10 @@ func getxattr(path, attr string) ([]byte, error) {
 
 func setxattr(path, key, value string) error {
 	return sysx.LSetxattr(path, key, []byte(value), 0)
+}
+
+// apply applies a tar stream of an OCI style diff tar.
+// See https://github.com/opencontainers/image-spec/blob/master/layer.md#applying-changesets
+func apply(ctx context.Context, root string, tr *tar.Reader, options ApplyOptions) (size int64, err error) {
+	return applyNaive(ctx, root, tr, options)
 }

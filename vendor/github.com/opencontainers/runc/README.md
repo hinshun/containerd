@@ -41,7 +41,17 @@ make
 sudo make install
 ```
 
+You can also use `go get` to install to your `GOPATH`, assuming that you have a `github.com` parent folder already created under `src`:
+
+```bash
+go get github.com/opencontainers/runc
+cd $GOPATH/src/github.com/opencontainers/runc
+make
+sudo make install
+```
+
 `runc` will be installed to `/usr/local/sbin/runc` on your system.
+
 
 #### Build Tags
 
@@ -56,8 +66,9 @@ make BUILDTAGS='seccomp apparmor'
 |-----------|------------------------------------|-------------|
 | seccomp   | Syscall filtering                  | libseccomp  |
 | selinux   | selinux process and mount labeling | <none>      |
-| apparmor  | apparmor profile support           | libapparmor |
+| apparmor  | apparmor profile support           | <none>      |
 | ambient   | ambient capability support         | kernel 4.3  |
+| nokmem    | disable kernel memory account      | <none>      |
 
 
 ### Running the test suite
@@ -75,6 +86,18 @@ You can run a specific test case by setting the `TESTFLAGS` variable.
 
 ```bash
 # make test TESTFLAGS="-run=SomeTestFunction"
+```
+
+You can run a specific integration test by setting the `TESTPATH` variable.
+
+```bash
+# make test TESTPATH="/checkpoint.bats"
+```
+
+You can run a test in your proxy environment by setting `DOCKER_BUILD_PROXY` and `DOCKER_RUN_PROXY` variables.
+
+```bash
+# make test DOCKER_BUILD_PROXY="--build-arg HTTP_PROXY=http://yourproxy/" DOCKER_RUN_PROXY="-e HTTP_PROXY=http://yourproxy/"
 ```
 
 ### Dependencies Management
@@ -117,8 +140,8 @@ Assuming you have an OCI bundle from the previous step you can execute the conta
 The first way is to use the convenience command `run` that will handle creating, starting, and deleting the container after it exits.
 
 ```bash
+# run as root
 cd /mycontainer
-
 runc run mycontainerid
 ```
 
@@ -145,11 +168,33 @@ Your process field in the `config.json` should look like this below with `"termi
                         "TERM=xterm"
                 ],
                 "cwd": "/",
-                "capabilities": [
-                        "CAP_AUDIT_WRITE",
-                        "CAP_KILL",
-                        "CAP_NET_BIND_SERVICE"
-                ],
+                "capabilities": {
+                        "bounding": [
+                                "CAP_AUDIT_WRITE",
+                                "CAP_KILL",
+                                "CAP_NET_BIND_SERVICE"
+                        ],
+                        "effective": [
+                                "CAP_AUDIT_WRITE",
+                                "CAP_KILL",
+                                "CAP_NET_BIND_SERVICE"
+                        ],
+                        "inheritable": [
+                                "CAP_AUDIT_WRITE",
+                                "CAP_KILL",
+                                "CAP_NET_BIND_SERVICE"
+                        ],
+                        "permitted": [
+                                "CAP_AUDIT_WRITE",
+                                "CAP_KILL",
+                                "CAP_NET_BIND_SERVICE"
+                        ],
+                        "ambient": [
+                                "CAP_AUDIT_WRITE",
+                                "CAP_KILL",
+                                "CAP_NET_BIND_SERVICE"
+                        ]
+                },
                 "rlimits": [
                         {
                                 "type": "RLIMIT_NOFILE",
@@ -161,12 +206,12 @@ Your process field in the `config.json` should look like this below with `"termi
         },
 ```
 
-Now we can go though the lifecycle operations in your shell.
+Now we can go through the lifecycle operations in your shell.
 
 
 ```bash
+# run as root
 cd /mycontainer
-
 runc create mycontainerid
 
 # view the container is created and in the "created" state
@@ -182,8 +227,23 @@ runc list
 runc delete mycontainerid
 ```
 
-This adds more complexity but allows higher level systems to manage runc and provides points in the containers creation to setup various settings after the container has created and/or before it is deleted.
-This is commonly used to setup the container's network stack after `create` but before `start` where the user's defined process will be running.
+This allows higher level systems to augment the containers creation logic with setup of various settings after the container is created and/or before it is deleted. For example, the container's network stack is commonly set up after `create` but before `start`.
+
+#### Rootless containers
+`runc` has the ability to run containers without root privileges. This is called `rootless`. You need to pass some parameters to `runc` in order to run rootless containers. See below and compare with the previous version. Run the following commands as an ordinary user:
+```bash
+# Same as the first example
+mkdir ~/mycontainer
+cd ~/mycontainer
+mkdir rootfs
+docker export $(docker create busybox) | tar -C rootfs -xvf -
+
+# The --rootless parameter instructs runc spec to generate a configuration for a rootless container, which will allow you to run the container as a non-root user.
+runc spec --rootless
+
+# The --root parameter tells runc where to store the container state. It must be writable by the user.
+runc --root /tmp/runc run mycontainerid
+```
 
 #### Supervisors
 
@@ -204,3 +264,7 @@ PIDFile=/run/mycontainerid.pid
 [Install]
 WantedBy=multi-user.target
 ```
+
+## License
+
+The code and docs are released under the [Apache 2.0 license](LICENSE).
