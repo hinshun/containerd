@@ -638,7 +638,7 @@ func (nw *namespacedWriter) commit(ctx context.Context, tx *bolt.Tx, size int64,
 		}
 		size = status.Offset
 
-		if err := nw.w.Commit(ctx, size, expected); err != nil && !errdefs.IsAlreadyExists(err) {
+		if err := nw.w.Commit(ctx, size, expected, opts...); err != nil && !errdefs.IsAlreadyExists(err) {
 			return "", err
 		}
 		actual = nw.w.Digest()
